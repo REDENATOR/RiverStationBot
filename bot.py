@@ -9,6 +9,19 @@ from handlers.registration import start, receive_phone, ASK_PHONE
 from handlers.tickets import buy_ticket, process_route, process_schedule, my_tickets, ASK_ROUTE, ASK_SCHEDULE
 from handlers.admin import add_test_data_command
 from handlers.vessels import add_vessel_start, get_vessel_name, get_vessel_capacity, ASK_VESSEL_NAME, ASK_VESSEL_CAPACITY
+from handlers.route import (
+    add_route_start,
+    process_vessel_selection,
+    get_route_origin,
+    get_route_destination,
+    get_route_duration,
+    get_route_price,
+    ASK_ROUTE_VESSEL,
+    ASK_ROUTE_ORIGIN,
+    ASK_ROUTE_DESTINATION,
+    ASK_ROUTE_DURATION,
+    ASK_ROUTE_PRICE
+)
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -54,7 +67,21 @@ def main():
     )
     application.add_handler(vessel_handler)
 
-    # === 4. ПРОСТЫЕ КОМАНДЫ ===
+    # === 4. ДОБАВЛЕНИЕ МАРШРУТА (АДМИН) ===
+    route_handler = ConversationHandler(
+        entry_points=[CommandHandler('add_route', add_route_start)],
+        states={
+            ASK_ROUTE_VESSEL: [CallbackQueryHandler(process_vessel_selection, pattern='^vessel_')],
+            ASK_ROUTE_ORIGIN: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_route_origin)],
+            ASK_ROUTE_DESTINATION: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_route_destination)],
+            ASK_ROUTE_DURATION: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_route_duration)],
+            ASK_ROUTE_PRICE: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_route_price)],
+        },
+        fallbacks=[CommandHandler('cancel', cancel)]  # ← используем универсальный cancel
+    )
+    application.add_handler(route_handler)
+
+    # === 5. ПРОСТЫЕ КОМАНДЫ ===
     application.add_handler(CommandHandler('add_test_data', add_test_data_command))
     application.add_handler(MessageHandler(filters.Regex('^📋 Мои билеты$'), my_tickets))
 
@@ -63,6 +90,7 @@ def main():
     print("   /start - начать работу")
     print("   /add_test_data - добавить тестовые рейсы (админ)")
     print("   /add_vessel - добавить новое судно (админ)")
+    print("   /add_route - добавить маршрут(админ)")
     print("   /cancel - отменить действие")
     print("\n⏹ Для остановки бота нажмите Ctrl+C\n")
 

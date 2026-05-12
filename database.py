@@ -100,7 +100,7 @@ def add_test_data():
     session.add_all([route1, route2])
     session.commit()
 
-    # 3. Создаём расписание на завтра (ВОТ ОТКУДА ЭТОТ КОД!)
+    # 3. Создаём расписание на завтра
     from datetime import timedelta
     tomorrow = datetime.now() + timedelta(days=1)
 
