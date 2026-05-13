@@ -22,6 +22,15 @@ from handlers.route import (
     ASK_ROUTE_DURATION,
     ASK_ROUTE_PRICE
 )
+from handlers.schedule import (
+    add_schedule_start,
+    process_route_selection,
+    get_schedule_datetime,
+    get_schedule_seats,
+    ASK_SCHEDULE_ROUTE,
+    ASK_SCHEDULE_DATETIME,
+    ASK_SCHEDULE_SEATS
+)
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -77,11 +86,23 @@ def main():
             ASK_ROUTE_DURATION: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_route_duration)],
             ASK_ROUTE_PRICE: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_route_price)],
         },
-        fallbacks=[CommandHandler('cancel', cancel)]  # ← используем универсальный cancel
+        fallbacks=[CommandHandler('cancel', cancel)]
     )
     application.add_handler(route_handler)
 
-    # === 5. ПРОСТЫЕ КОМАНДЫ ===
+    # === 5. ДОБАВЛЕНИЕ РАСПИСАНИЯ (АДМИН) ===
+    schedule_handler = ConversationHandler(
+        entry_points=[CommandHandler('add_schedule', add_schedule_start)],
+        states={
+            ASK_SCHEDULE_ROUTE: [CallbackQueryHandler(process_route_selection, pattern='^route_')],
+            ASK_SCHEDULE_DATETIME: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_schedule_datetime)],
+            ASK_SCHEDULE_SEATS: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_schedule_seats)],
+        },
+        fallbacks=[CommandHandler('cancel', cancel)]
+    )
+    application.add_handler(schedule_handler)
+
+    # === 6. ПРОСТЫЕ КОМАНДЫ ===
     application.add_handler(CommandHandler('add_test_data', add_test_data_command))
     application.add_handler(MessageHandler(filters.Regex('^📋 Мои билеты$'), my_tickets))
 
