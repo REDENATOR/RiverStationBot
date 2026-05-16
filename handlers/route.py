@@ -3,20 +3,15 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ConversationHandler
 from database import Session, Vessel, Route
 from config import ADMIN_ID
+from handlers.common import admin_keyboard, cancel_keyboard, cancel_with_button
+
 
 # Состояния для добавления маршрута
 ASK_ROUTE_VESSEL, ASK_ROUTE_ORIGIN, ASK_ROUTE_DESTINATION, ASK_ROUTE_DURATION, ASK_ROUTE_PRICE = range(12, 17)
 
 
-# ==========================================
-# ВСПОМОГАТЕЛЬНАЯ ФУНКЦИЯ ДЛЯ СОЗДАНИЯ КНОПОК С СУДАМИ
-# ==========================================
-
 def get_vessels_keyboard():
-    """
-    Создаёт inline-клавиатуру со списком всех судов.
-    Каждая кнопка при нажатии отправляет callback_data вида "vessel_123"
-    """
+    """Создаёт inline-клавиатуру со списком всех судов"""
     session = Session()
     vessels = session.query(Vessel).all()
     session.close()
@@ -26,43 +21,19 @@ def get_vessels_keyboard():
 
     keyboard = []
     for vessel in vessels:
-        # Создаём кнопку с названием судна и его вместимостью
         button = InlineKeyboardButton(
             text=f"🚢 {vessel.name} ({vessel.capacity} мест)",
             callback_data=f"vessel_{vessel.vessel_id}_{vessel.name}"
         )
-        keyboard.append([button])  # Каждая кнопка в отдельном ряду
+        keyboard.append([button])
 
     return InlineKeyboardMarkup(keyboard)
 
 
-def get_vessels_list_text():
-    """Возвращает строку со списком всех судов (для текстового сообщения)"""
-    session = Session()
-    vessels = session.query(Vessel).all()
-    session.close()
-
-    if not vessels:
-        return "❌ В базе пока нет судов. Сначала добавьте судно командой /add_vessel"
-
-    text = "📋 *Доступные суда:*\n"
-    for v in vessels:
-        text += f"   • {v.name} (вместимость: {v.capacity} мест)\n"
-    return text
-
-
-# ==========================================
-# НАЧАЛО ДОБАВЛЕНИЯ МАРШРУТА
-# ==========================================
-
 async def add_route_start(update: Update, context):
-    """
-    Команда /add_route — начало добавления нового маршрута.
-    Доступно только администратору.
-    """
+    """Команда /add_route — начало добавления нового маршрута (только админ)"""
     user_id = update.effective_user.id
 
-    # Проверка прав администратора
     if user_id != ADMIN_ID:
         await update.message.reply_text(
             "❌ У вас нет прав для выполнения этой команды.\n"
@@ -70,7 +41,6 @@ async def add_route_start(update: Update, context):
         )
         return ConversationHandler.END
 
-    # Проверяем, есть ли вообще суда в базе данных
     session = Session()
     vessels_count = session.query(Vessel).count()
     session.close()
@@ -78,89 +48,75 @@ async def add_route_start(update: Update, context):
     if vessels_count == 0:
         await update.message.reply_text(
             "❌ Нет доступных судов!\n\n"
-            "Сначала добавьте судно командой /add_vessel,\n"
-            "а потом создавайте маршруты."
+            "Сначала добавьте судно кнопкой «➕ Добавить судно»",
+            reply_markup=admin_keyboard()
         )
         return ConversationHandler.END
 
-    # Создаём клавиатуру с кнопками судов
     keyboard = get_vessels_keyboard()
-
     if keyboard is None:
         await update.message.reply_text(
             "❌ Нет доступных судов!\n\n"
-            "Сначала добавьте судно командой /add_vessel"
+            "Сначала добавьте судно кнопкой «➕ Добавить судно»",
+            reply_markup=admin_keyboard()
         )
         return ConversationHandler.END
 
-    # Сохраняем список судов в context.user_data для проверки позже
     session = Session()
     vessels = session.query(Vessel).all()
     session.close()
     context.user_data['available_vessels'] = {v.name: v.vessel_id for v in vessels}
 
-    # Отправляем сообщение с кнопками
     await update.message.reply_text(
         "🚢 *Добавление нового маршрута* 🚢\n\n"
         "📋 *Выберите судно* из списка ниже, нажав на кнопку:\n\n"
-        "Для отмены напишите /cancel",
+        "Для отмены нажмите кнопку «❌ Отмена»",
         parse_mode='Markdown',
         reply_markup=keyboard
     )
     return ASK_ROUTE_VESSEL
 
 
-# ==========================================
-# ШАГ 1: ОБРАБОТКА ВЫБОРА СУДНА (НАЖАТИЕ НА КНОПКУ)
-# ==========================================
-
 async def process_vessel_selection(update: Update, context):
-    """
-    Обрабатывает нажатие на кнопку с выбором судна.
-    Извлекает ID и название судна из callback_data.
-    """
+    """Обрабатывает нажатие на кнопку с выбором судна"""
     query = update.callback_query
-    await query.answer()  # Убираем "часики" загрузки
+    await query.answer()
 
-    # Разбираем callback_data вида "vessel_123_Метеор-120"
     data_parts = query.data.split('_')
     vessel_id = int(data_parts[1])
-    vessel_name = '_'.join(data_parts[2:])  # На случай если в названии есть подчёркивания
+    vessel_name = '_'.join(data_parts[2:])
 
-    # Сохраняем данные судна
     context.user_data['route_vessel_id'] = vessel_id
     context.user_data['route_vessel_name'] = vessel_name
 
-    # Получаем вместимость судна (для информации)
     session = Session()
     vessel = session.query(Vessel).filter_by(vessel_id=vessel_id).first()
     session.close()
     context.user_data['route_vessel_capacity'] = vessel.capacity if vessel else 0
 
-    # Редактируем сообщение, убирая кнопки
     await query.edit_message_text(
         f"✅ *Выбрано судно:* {vessel_name} (вместимость: {vessel.capacity if vessel else '?'} мест)\n\n"
         f"📍 *Введите пункт отправления* (откуда идёт маршрут).\n"
-        f"Примеры: «Речной вокзал», «Причал №5», «Саратов»\n\n"
-        f"Для отмены напишите /cancel",
-        parse_mode='Markdown'
+        f"Примеры: *Речной вокзал*, *Причал №5*, *Саратов*\n\n"
+        f"Для отмены нажмите кнопку «❌ Отмена»",
+        parse_mode='Markdown',
+        reply_markup=cancel_keyboard()
     )
-
     return ASK_ROUTE_ORIGIN
 
 
-# ==========================================
-# ШАГ 2: ПОЛУЧЕНИЕ ПУНКТА ОТПРАВЛЕНИЯ
-# ==========================================
-
 async def get_route_origin(update: Update, context):
     """Получает пункт отправления маршрута"""
+    if update.message.text == "❌ Отмена":
+        return await cancel_with_button(update, context)
+
     route_origin = update.message.text.strip()
 
     if len(route_origin) < 2:
         await update.message.reply_text(
             "❌ Название слишком короткое (минимум 2 символа).\n"
-            "Введите пункт отправления ещё раз:"
+            "Введите пункт отправления ещё раз:",
+            reply_markup=cancel_keyboard()
         )
         return ASK_ROUTE_ORIGIN
 
@@ -169,25 +125,26 @@ async def get_route_origin(update: Update, context):
     await update.message.reply_text(
         f"✅ Пункт отправления: *{route_origin}*\n\n"
         f"📍 *Введите пункт назначения* (куда идёт маршрут).\n"
-        f"Примеры: «Зеленогорск», «Солнечный берег», «Москва»\n\n"
-        f"Для отмены напишите /cancel",
-        parse_mode='Markdown'
+        f"Примеры: *Зеленогорск*, *Солнечный берег*, *Москва*\n\n"
+        f"Для отмены нажмите кнопку «❌ Отмена»",
+        parse_mode='Markdown',
+        reply_markup=cancel_keyboard()
     )
     return ASK_ROUTE_DESTINATION
 
 
-# ==========================================
-# ШАГ 3: ПОЛУЧЕНИЕ ПУНКТА НАЗНАЧЕНИЯ
-# ==========================================
-
 async def get_route_destination(update: Update, context):
     """Получает пункт назначения маршрута"""
+    if update.message.text == "❌ Отмена":
+        return await cancel_with_button(update, context)
+
     route_destination = update.message.text.strip()
 
     if len(route_destination) < 2:
         await update.message.reply_text(
             "❌ Название слишком короткое (минимум 2 символа).\n"
-            "Введите пункт назначения ещё раз:"
+            "Введите пункт назначения ещё раз:",
+            reply_markup=cancel_keyboard()
         )
         return ASK_ROUTE_DESTINATION
 
@@ -197,39 +154,33 @@ async def get_route_destination(update: Update, context):
         f"✅ Пункт назначения: *{route_destination}*\n\n"
         f"⏱ *Введите длительность маршрута* в минутах.\n"
         f"Примеры: 45, 60, 120\n\n"
-        f"Для отмены напишите /cancel",
-        parse_mode='Markdown'
+        f"Для отмены нажмите кнопку «❌ Отмена»",
+        parse_mode='Markdown',
+        reply_markup=cancel_keyboard()
     )
     return ASK_ROUTE_DURATION
 
 
-# ==========================================
-# ШАГ 4: ПОЛУЧЕНИЕ ДЛИТЕЛЬНОСТИ
-# ==========================================
-
 async def get_route_duration(update: Update, context):
     """Получает длительность маршрута в минутах"""
+    if update.message.text == "❌ Отмена":
+        return await cancel_with_button(update, context)
+
     try:
         duration = int(update.message.text.strip())
     except ValueError:
         await update.message.reply_text(
             "❌ Пожалуйста, введите число (количество минут).\n"
-            "Примеры: 45, 60, 120\n\n"
-            "Попробуйте ещё раз:"
+            "Примеры: 45, 60, 120",
+            reply_markup=cancel_keyboard()
         )
         return ASK_ROUTE_DURATION
 
-    if duration < 1:
+    if duration < 1 or duration > 1440:
         await update.message.reply_text(
-            "❌ Длительность должна быть не менее 1 минуты.\n"
-            "Введите корректное значение:"
-        )
-        return ASK_ROUTE_DURATION
-
-    if duration > 1440:  # максимум сутки
-        await update.message.reply_text(
-            "❌ Длительность не может превышать 1440 минут (24 часа).\n"
-            "Введите корректное значение:"
+            "❌ Длительность должна быть от 1 до 1440 минут.\n"
+            "Введите корректное значение:",
+            reply_markup=cancel_keyboard()
         )
         return ASK_ROUTE_DURATION
 
@@ -239,60 +190,51 @@ async def get_route_duration(update: Update, context):
         f"✅ Длительность: *{duration}* минут\n\n"
         f"💰 *Введите цену билета* в рублях.\n"
         f"Примеры: 450, 300, 1000\n\n"
-        f"Для отмены напишите /cancel",
-        parse_mode='Markdown'
+        f"Для отмены нажмите кнопку «❌ Отмена»",
+        parse_mode='Markdown',
+        reply_markup=cancel_keyboard()
     )
     return ASK_ROUTE_PRICE
 
 
-# ==========================================
-# ШАГ 5: ПОЛУЧЕНИЕ ЦЕНЫ И СОХРАНЕНИЕ МАРШРУТА
-# ==========================================
-
 async def get_route_price(update: Update, context):
     """Получает цену билета и сохраняет маршрут в базу данных"""
+    if update.message.text == "❌ Отмена":
+        return await cancel_with_button(update, context)
+
     try:
         price = int(update.message.text.strip())
     except ValueError:
         await update.message.reply_text(
             "❌ Пожалуйста, введите число (цену в рублях).\n"
-            "Примеры: 450, 300, 1000\n\n"
-            "Попробуйте ещё раз:"
+            "Примеры: 450, 300, 1000",
+            reply_markup=cancel_keyboard()
         )
         return ASK_ROUTE_PRICE
 
-    if price < 1:
+    if price < 1 or price > 100000:
         await update.message.reply_text(
-            "❌ Цена должна быть не менее 1 рубля.\n"
-            "Введите корректное значение:"
+            "❌ Цена должна быть от 1 до 100 000 рублей.\n"
+            "Введите корректное значение:",
+            reply_markup=cancel_keyboard()
         )
         return ASK_ROUTE_PRICE
 
-    if price > 100000:
-        await update.message.reply_text(
-            "❌ Цена не может превышать 100 000 рублей.\n"
-            "Введите корректное значение:"
-        )
-        return ASK_ROUTE_PRICE
-
-    # Получаем все сохранённые данные из context.user_data
     vessel_id = context.user_data.get('route_vessel_id')
     vessel_name = context.user_data.get('route_vessel_name')
     origin = context.user_data.get('route_origin')
     destination = context.user_data.get('route_destination')
     duration = context.user_data.get('route_duration')
 
-    # Проверяем, что все данные есть
     if not all([vessel_id, origin, destination, duration]):
         await update.message.reply_text(
-            "❌ Ошибка: потеряны данные. Начните заново с /add_route"
+            "❌ Ошибка: потеряны данные. Начните заново.",
+            reply_markup=admin_keyboard()
         )
         return ConversationHandler.END
 
-    # === СОЗДАЁМ НОВЫЙ МАРШРУТ ===
     session = Session()
 
-    # Проверка на дубликат
     existing = session.query(Route).filter_by(
         vessel_id=vessel_id,
         origin=origin,
@@ -304,13 +246,12 @@ async def get_route_price(update: Update, context):
             f"❌ Маршрут '{origin} → {destination}' на судне '{vessel_name}' уже существует!\n\n"
             f"📋 Существующий маршрут:\n"
             f"   • Длительность: {existing.duration} мин\n"
-            f"   • Цена: {existing.base_price} руб.\n\n"
-            f"Используйте другие данные."
+            f"   • Цена: {existing.base_price} руб.",
+            reply_markup=admin_keyboard()
         )
         session.close()
         return ConversationHandler.END
 
-    # Создаём новый маршрут
     new_route = Route(
         vessel_id=vessel_id,
         origin=origin,
@@ -323,20 +264,17 @@ async def get_route_price(update: Update, context):
     session.commit()
     session.close()
 
-    # Очищаем временные данные
     context.user_data.clear()
 
-    # Отправляем подтверждение
     await update.message.reply_text(
-        f"✅ МАРШРУТ УСПЕШНО ДОБАВЛЕН! ✅\n\n"
+        f"✅ *МАРШРУТ УСПЕШНО ДОБАВЛЕН!* ✅\n\n"
         f"🚢 Судно: {vessel_name}\n"
         f"📍 {origin} → {destination}\n"
         f"⏱ Длительность: {duration} минут\n"
         f"💰 Цена: {price} руб.\n\n"
-        f"Теперь вы можете создать расписание для этого маршрута.\n"
-        f"Используйте команду /add_schedule"
+        f"Теперь вы можете создать расписание кнопкой «📅 Добавить рейс»",
+        parse_mode='Markdown',
+        reply_markup=admin_keyboard()
     )
 
     return ConversationHandler.END
-
-
