@@ -23,8 +23,15 @@ from handlers.admin import (
 
 # Управление судами
 from handlers.vessels import (
-    add_vessel_start, get_vessel_name, get_vessel_capacity,
-    ASK_VESSEL_NAME, ASK_VESSEL_CAPACITY
+    add_vessel_start,
+    get_vessel_name,
+    get_vessel_capacity,
+    delete_vessel_start,           # ← ДОБАВИТЬ
+    process_delete_vessel,         # ← ДОБАВИТЬ
+    cancel_delete_vessel,          # ← ДОБАВИТЬ
+    ASK_VESSEL_NAME,
+    ASK_VESSEL_CAPACITY,
+    ASK_DELETE_VESSEL_NAME         # ← ДОБАВИТЬ
 )
 
 # Управление маршрутами
@@ -82,8 +89,16 @@ def main():
         fallbacks=[CommandHandler('cancel', cancel)]
     )
     application.add_handler(vessel_handler)
-
-    # === 4. ДОБАВЛЕНИЕ МАРШРУТА ===
+    # === 4. УДАЛЕНИЕ СУДНА (АДМИН) ===
+    delete_vessel_handler = ConversationHandler(
+        entry_points=[MessageHandler(filters.Regex('^🗑 Удалить судно$'), delete_vessel_start)],
+        states={
+            ASK_DELETE_VESSEL_NAME: [CallbackQueryHandler(process_delete_vessel, pattern='^delete_vessel_')],
+        },
+        fallbacks=[CommandHandler('cancel', cancel_delete_vessel)]
+    )
+    application.add_handler(delete_vessel_handler)
+    # === 5. ДОБАВЛЕНИЕ МАРШРУТА ===
     route_handler = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex('^🛣 Добавить маршрут$'), add_route_start)],
         states={
@@ -97,7 +112,7 @@ def main():
     )
     application.add_handler(route_handler)
 
-    # === 5. ДОБАВЛЕНИЕ РАСПИСАНИЯ ===
+    # === 6. ДОБАВЛЕНИЕ РАСПИСАНИЯ ===
     schedule_handler = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex('^📅 Добавить рейс$'), add_schedule_start)],
         states={
@@ -109,7 +124,7 @@ def main():
     )
     application.add_handler(schedule_handler)
 
-    # === 6. АДМИН-КОМАНДЫ ===
+    # === 7. АДМИН-КОМАНДЫ ===
     application.add_handler(CommandHandler('add_test_data', add_test_data_command))
     application.add_handler(MessageHandler(filters.Regex('^📊 Статистика$'), show_statistics))
     application.add_handler(MessageHandler(filters.Regex('^🗑 Очистить данные$'), clear_all_data))
@@ -118,7 +133,7 @@ def main():
     application.add_handler(MessageHandler(filters.Regex('^👑 Админ-панель$'), show_admin_menu))
     application.add_handler(MessageHandler(filters.Regex('^📋 Мои билеты$'), my_tickets))
 
-    # === 7. ОБРАБОТЧИК КНОПКИ ОТМЕНЫ ===
+    # === 8. ОБРАБОТЧИК КНОПКИ ОТМЕНЫ ===
     application.add_handler(MessageHandler(filters.Regex('^❌ Отмена$'), cancel_with_button))
     application.add_handler(MessageHandler(filters.Regex('^🏠 В главное меню$'), exit_admin_menu))
 

@@ -1,17 +1,26 @@
-"""Управление судами: добавление новых судов (только админ)"""
-from telegram import Update
+"""Управление судами: добавление и удаление судов (только админ)"""
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ConversationHandler
-from database import Session, Vessel
+from database import Session, Vessel, Route, Schedule, Ticket
 from config import ADMIN_ID
-from handlers.common import admin_keyboard, cancel_keyboard
+from handlers.common import admin_keyboard, cancel_keyboard, cancel_with_button
 
 
 # Состояния для добавления судна
 ASK_VESSEL_NAME, ASK_VESSEL_CAPACITY = 10, 11
 
+# Состояния для удаления судна
+ASK_DELETE_VESSEL_NAME = 20
+
+
+# ==========================================
+# ДОБАВЛЕНИЕ СУДНА
+# ==========================================
 
 async def add_vessel_start(update: Update, context):
-    """Команда /add_vessel — начало добавления нового судна (только админ)"""
+    """
+    Команда /add_vessel — начало добавления нового судна (только админ).
+    """
     user_id = update.effective_user.id
 
     if user_id != ADMIN_ID:
@@ -25,7 +34,7 @@ async def add_vessel_start(update: Update, context):
         "🚢 *Добавление нового судна* 🚢\n\n"
         "Введите название судна.\n"
         "Примеры: *Метеор-200*, *Восход*, *Ракета-90*\n\n"
-        "Для отмены нажмите кнопку «❌ Отмена»",
+        "Для отмены нажмите кнопку ниже:",
         parse_mode='Markdown',
         reply_markup=cancel_keyboard()
     )
@@ -34,7 +43,6 @@ async def add_vessel_start(update: Update, context):
 
 async def get_vessel_name(update: Update, context):
     """Получает название судна"""
-    # Проверка на отмену
     if update.message.text == "❌ Отмена":
         return await cancel_with_button(update, context)
 
@@ -54,7 +62,7 @@ async def get_vessel_name(update: Update, context):
         f"✅ Название: *{vessel_name}*\n\n"
         "📊 Введите вместимость судна (количество пассажиров).\n"
         "Примеры: 40, 60, 100, 150\n\n"
-        "Для отмены нажмите кнопку «❌ Отмена»",
+        "Для отмены нажмите кнопку ниже:",
         parse_mode='Markdown',
         reply_markup=cancel_keyboard()
     )
@@ -63,7 +71,6 @@ async def get_vessel_name(update: Update, context):
 
 async def get_vessel_capacity(update: Update, context):
     """Получает вместимость и сохраняет судно"""
-    # Проверка на отмену
     if update.message.text == "❌ Отмена":
         return await cancel_with_button(update, context)
 
@@ -96,6 +103,7 @@ async def get_vessel_capacity(update: Update, context):
 
     session = Session()
 
+    # Проверка на дубликат
     existing = session.query(Vessel).filter_by(name=vessel_name).first()
     if existing:
         await update.message.reply_text(
@@ -106,6 +114,7 @@ async def get_vessel_capacity(update: Update, context):
         session.close()
         return ConversationHandler.END
 
+    # Создаём новое судно
     new_vessel = Vessel(name=vessel_name, capacity=capacity)
     session.add(new_vessel)
     session.commit()
@@ -123,5 +132,172 @@ async def get_vessel_capacity(update: Update, context):
     return ConversationHandler.END
 
 
-# Импортируем cancel_with_button из common
-from handlers.common import cancel_with_button
+# ==========================================
+# УДАЛЕНИЕ СУДНА
+# ==========================================
+
+def get_vessels_for_deletion_keyboard():
+    """
+    Создаёт inline-клавиатуру со списком всех судов для удаления.
+    Каждая кнопка при нажатии отправляет callback_data вида "delete_vessel_{vessel_id}_{vessel_name}"
+    """
+    session = Session()
+    vessels = session.query(Vessel).all()
+    session.close()
+
+    if not vessels:
+        return None
+
+    keyboard = []
+    for vessel in vessels:
+        # Проверяем, есть ли связанные маршруты
+        session = Session()
+        routes_count = session.query(Route).filter_by(vessel_id=vessel.vessel_id).count()
+        session.close()
+
+        # Добавляем предупреждение, если есть связанные маршруты
+        warning = " ⚠️" if routes_count > 0 else ""
+
+        button = InlineKeyboardButton(
+            text=f"❌ {vessel.name} ({vessel.capacity} мест){warning}",
+            callback_data=f"delete_vessel_{vessel.vessel_id}_{vessel.name}"
+        )
+        keyboard.append([button])
+
+    return InlineKeyboardMarkup(keyboard)
+
+
+async def delete_vessel_start(update: Update, context):
+    """
+    Команда /delete_vessel — начало удаления судна (только админ).
+    Показывает список всех судов для выбора.
+    """
+    user_id = update.effective_user.id
+
+    if user_id != ADMIN_ID:
+        await update.message.reply_text(
+            "❌ У вас нет прав для выполнения этой команды.\n"
+            "Только администратор может удалять суда."
+        )
+        return ConversationHandler.END
+
+    # Проверяем, есть ли суда
+    session = Session()
+    vessels_count = session.query(Vessel).count()
+    session.close()
+
+    if vessels_count == 0:
+        await update.message.reply_text(
+            "❌ Нет доступных судов для удаления!\n\n"
+            "Сначала добавьте судно кнопкой «➕ Добавить судно»",
+            reply_markup=admin_keyboard()
+        )
+        return ConversationHandler.END
+
+    # Создаём клавиатуру с судами для удаления
+    keyboard = get_vessels_for_deletion_keyboard()
+
+    await update.message.reply_text(
+        "🗑 *Удаление судна* 🗑\n\n"
+        "⚠️ *ВНИМАНИЕ!* При удалении судна:\n"
+        "• Будут удалены ВСЕ связанные маршруты\n"
+        "• Будут удалены ВСЕ рейсы этих маршрутов\n"
+        "• Будут удалены ВСЕ билеты на эти рейсы\n\n"
+        "Это действие НЕОБРАТИМО!\n\n"
+        "📋 *Выберите судно* для удаления из списка ниже:",
+        parse_mode='Markdown',
+        reply_markup=keyboard
+    )
+    return ASK_DELETE_VESSEL_NAME
+
+
+async def process_delete_vessel(update: Update, context):
+    """
+    Обрабатывает нажатие на кнопку с выбором судна для удаления.
+    Удаляет судно и все связанные данные.
+    """
+    query = update.callback_query
+    await query.answer()
+
+    # Разбираем callback_data
+    # Формат: delete_vessel_{vessel_id}_{vessel_name}
+    data_parts = query.data.split('_')
+    vessel_id = int(data_parts[2])
+    # Название может содержать подчёркивания, поэтому собираем всё после ID
+    vessel_name = '_'.join(data_parts[3:])
+
+    session = Session()
+
+    # Получаем судно
+    vessel = session.query(Vessel).filter_by(vessel_id=vessel_id).first()
+    if not vessel:
+        await query.edit_message_text(
+            f"❌ Судно «{vessel_name}» не найдено!",
+            reply_markup=admin_keyboard()
+        )
+        session.close()
+        return ConversationHandler.END
+
+    # Собираем статистику перед удалением
+    routes = session.query(Route).filter_by(vessel_id=vessel_id).all()
+    routes_count = len(routes)
+    schedules_count = 0
+    tickets_count = 0
+
+    for route in routes:
+        schedules = session.query(Schedule).filter_by(route_id=route.route_id).all()
+        schedules_count += len(schedules)
+        for schedule in schedules:
+            tickets = session.query(Ticket).filter_by(schedule_id=schedule.schedule_id).count()
+            tickets_count += tickets
+
+    # Удаляем в правильном порядке (сначала зависимые данные)
+    # 1. Удаляем билеты
+    for route in routes:
+        schedules = session.query(Schedule).filter_by(route_id=route.route_id).all()
+        for schedule in schedules:
+            session.query(Ticket).filter_by(schedule_id=schedule.schedule_id).delete()
+
+    # 2. Удаляем расписание
+    for route in routes:
+        session.query(Schedule).filter_by(route_id=route.route_id).delete()
+
+    # 3. Удаляем маршруты
+    session.query(Route).filter_by(vessel_id=vessel_id).delete()
+
+    # 4. Удаляем само судно
+    session.delete(vessel)
+    session.commit()
+
+    # Получаем оставшиеся суда для обновления статистики
+    remaining_vessels = session.query(Vessel).count()
+    session.close()
+
+    # Формируем сообщение об успешном удалении
+    result_text = (
+        f"✅ *Судно успешно удалено!* ✅\n\n"
+        f"🗑 Удалено:\n"
+        f"   • Судно: {vessel_name}\n"
+        f"   • Маршрутов: {routes_count}\n"
+        f"   • Рейсов: {schedules_count}\n"
+        f"   • Билетов: {tickets_count}\n\n"
+        f"📊 Осталось судов: {remaining_vessels}"
+    )
+
+    await query.edit_message_text(
+        result_text,
+        parse_mode='Markdown',
+        reply_markup=admin_keyboard()
+    )
+
+    return ConversationHandler.END
+
+
+async def cancel_delete_vessel(update: Update, context):
+    """Отмена удаления судна"""
+    context.user_data.clear()
+    await update.message.reply_text(
+        "❌ Удаление судна отменено.",
+        reply_markup=admin_keyboard()
+    )
+    return ConversationHandler.END
